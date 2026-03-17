@@ -3,12 +3,11 @@ import numpy as np
 
 
 
-from keras.layers import Input, Dense, Lambda, concatenate, BatchNormalization, Activation
-from keras.models import Model
-from tensorflow.keras.optimizers.legacy import Adam
+from tensorflow.keras.layers import Input, Dense, Lambda, concatenate, BatchNormalization, Activation
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
-tf.compat.v1.disable_eager_execution()
-import keras.backend as K
+import tensorflow.keras.backend as K
 
 from drl import DRL
 from envs import TradingEnv
@@ -23,8 +22,6 @@ class DDPG(DRL):
 
     def __init__(self, env):
         super(DDPG, self).__init__()
-
-        self.sess = tf.compat.v1.keras.backend.get_session()
 
         self.env = env
         self.upper_bound = self.env.action_space.high[0]
@@ -94,7 +91,6 @@ class DDPG(DRL):
         # self.noise_clip = 5
 
         # gradient function
-        self.get_critic_grad = self.critic_gradient()
         self.actor_optimizer()
 
     def load(self, tag=""):
@@ -199,32 +195,9 @@ class DDPG(DRL):
     def actor_optimizer(self):
         """actor_optimizer.
         Returns:
-            function, opt function for actor.
+            optimizer for actor.
         """
-        self.ainput = self.actor.input
-        aoutput = self.actor.output
-        trainable_weights = self.actor.trainable_weights
-        self.action_gradient = tf.compat.v1.placeholder(tf.float32, shape=(None, 1))
-
-        # tf.gradients calculates dy/dx with a initial gradients for y
-        # action_gradient is dq/da, so this is dq/da * da/dparams
-        params_grad = tf.gradients(aoutput, trainable_weights, -self.action_gradient)
-        grads = zip(params_grad, trainable_weights)
-        self.opt = tf.compat.v1.train.AdamOptimizer(self.actor_lr).apply_gradients(grads)
-        self.sess.run(tf.compat.v1.global_variables_initializer())
-
-    def critic_gradient(self):
-        """get critic gradient function.
-        Returns:
-            function, gradient function for critic.
-        """
-        cinput = self.critic_Q.input
-        coutput = self.critic_Q.output
-
-        # compute the gradient of the action with q value, dq/da.
-        action_grads = K.gradients(coutput, cinput[1])
-
-        return K.function([cinput[0], cinput[1]], action_grads)
+        self.actor_opt = tf.keras.optimizers.Adam(self.actor_lr)
 
     def egreedy_action(self, X):
         """get actor action with ou noise.
@@ -233,14 +206,15 @@ class DDPG(DRL):
         """
         # do the epsilon greedy way; not using OU
         if np.random.rand() <= self.epsilon:
-            action = env.action_space.sample()
+            # sample() returns a (1,) array for Box spaces; extract scalar
+            action = float(self.env.action_space.sample()[0])
 
             # may use for 2nd round training
-            # action = self.actor.predict(X)[0][0]
+            # action = float(self.actor.predict(X)[0][0])
             # noise = np.clip(np.random.normal(0, self.policy_noise), -self.noise_clip, self.noise_clip)
             # action = np.clip(action + noise, 0, self.env.num_contract * 100)
         else:
-            action = self.actor.predict(X)[0][0]
+            action = float(self.actor.predict(X)[0][0])
 
         return action, None, None
 
@@ -319,13 +293,13 @@ class DDPG(DRL):
         loss_ex2 = self.critic_Q_ex2.fit([X1, X2], y2, sample_weight=weights, verbose=0)
         loss_ex2 = np.mean(loss_ex2.history['loss'])
 
-        X3 = self.actor.predict(X1)
-
-        a_grads = np.array(self.get_critic_grad([X1, X3]))[0]
-        self.sess.run(self.opt, feed_dict={
-            self.ainput: X1,
-            self.action_gradient: a_grads
-        })
+        X1_tensor = tf.convert_to_tensor(X1, dtype=tf.float32)
+        with tf.GradientTape() as tape:
+            actions = self.actor(X1_tensor, training=True)
+            q_values = self.critic_Q([X1_tensor, actions], training=False)
+            actor_loss = -tf.reduce_mean(q_values)
+        actor_grads = tape.gradient(actor_loss, self.actor.trainable_variables)
+        self.actor_opt.apply_gradients(zip(actor_grads, self.actor.trainable_variables))
 
         return loss_ex, loss_ex2
 
