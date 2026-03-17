@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import time
 
 
 
@@ -86,6 +87,9 @@ class DDPG(DRL):
         # memory sample batch size
         self.batch_size = 128
 
+        # training updates become expensive once replay is warm; update every N env steps
+        self.update_every = 4
+
         # may use for 2nd round training
         # self.policy_noise = 5
         # self.noise_clip = 5
@@ -96,13 +100,27 @@ class DDPG(DRL):
     def load(self, tag=""):
         """load two Qs for test"""
         if tag == "":
-            actor_file = "model/ddpg_actor.h5"
-            critic_Q_ex_file = "model/ddpg_critic_Q_ex.h5"
-            critic_Q_ex2_file = "model/ddpg_critic_Q_ex2.h5"
+            actor_file = "model/ddpg_actor.weights.h5"
+            critic_Q_ex_file = "model/ddpg_critic_Q_ex.weights.h5"
+            critic_Q_ex2_file = "model/ddpg_critic_Q_ex2.weights.h5"
         else:
-            actor_file = "model/ddpg_actor_" + tag + ".h5"
-            critic_Q_ex_file = "model/ddpg_critic_Q_ex_" + tag + ".h5"
-            critic_Q_ex2_file = "model/ddpg_critic_Q_ex2_" + tag + ".h5"
+            actor_file = "model/ddpg_actor_" + tag + ".weights.h5"
+            critic_Q_ex_file = "model/ddpg_critic_Q_ex_" + tag + ".weights.h5"
+            critic_Q_ex2_file = "model/ddpg_critic_Q_ex2_" + tag + ".weights.h5"
+
+        # fallback to legacy filenames if present
+        if not os.path.exists(actor_file):
+            legacy_actor_file = actor_file.replace(".weights.h5", ".h5")
+            if os.path.exists(legacy_actor_file):
+                actor_file = legacy_actor_file
+        if not os.path.exists(critic_Q_ex_file):
+            legacy_critic_Q_ex_file = critic_Q_ex_file.replace(".weights.h5", ".h5")
+            if os.path.exists(legacy_critic_Q_ex_file):
+                critic_Q_ex_file = legacy_critic_Q_ex_file
+        if not os.path.exists(critic_Q_ex2_file):
+            legacy_critic_Q_ex2_file = critic_Q_ex2_file.replace(".weights.h5", ".h5")
+            if os.path.exists(legacy_critic_Q_ex2_file):
+                critic_Q_ex2_file = legacy_critic_Q_ex2_file
 
         if os.path.exists(actor_file):
             self.actor.load_weights(actor_file)
@@ -214,7 +232,7 @@ class DDPG(DRL):
             # noise = np.clip(np.random.normal(0, self.policy_noise), -self.noise_clip, self.noise_clip)
             # action = np.clip(action + noise, 0, self.env.num_contract * 100)
         else:
-            action = float(self.actor.predict(X)[0][0])
+            action = float(self.actor.predict(X, verbose=0)[0][0])
 
         return action, None, None
 
@@ -254,17 +272,17 @@ class DDPG(DRL):
         dones = dones.reshape(-1, 1)
 
         # get next_actions
-        next_actions = self.actor_hat.predict(next_states)
+        next_actions = self.actor_hat.predict(next_states, verbose=0)
 
         # prepare targets for Q_ex and Q_ex2 training
-        q_ex_next = self.critic_Q_ex_hat.predict([next_states, next_actions])
-        q_ex2_next = self.critic_Q_ex2_hat.predict([next_states, next_actions])
+        q_ex_next = self.critic_Q_ex_hat.predict([next_states, next_actions], verbose=0)
+        q_ex2_next = self.critic_Q_ex2_hat.predict([next_states, next_actions], verbose=0)
 
         target_q_ex = rewards + (1 - dones) * q_ex_next
         target_q_ex2 = rewards ** 2 + (1 - dones) * (2 * rewards * q_ex_next + q_ex2_next)
 
         # use Q2 TD error as priority weight
-        td_errors = self.critic_Q_ex2.predict([states, actions]) - target_q_ex2
+        td_errors = self.critic_Q_ex2.predict([states, actions], verbose=0) - target_q_ex2
         new_priorities = (np.abs(td_errors) + self.prioritized_replay_eps).flatten()
         self.replay_buffer.update_priorities(batch_idxes, new_priorities)
 
@@ -285,13 +303,9 @@ class DDPG(DRL):
         # flatten to prepare for training with weights
         weights = weights.flatten()
 
-        # default batch size is 32
-        loss_ex = self.critic_Q_ex.fit([X1, X2], y1, sample_weight=weights, verbose=0)
-        loss_ex = np.mean(loss_ex.history['loss'])
-
-        # default batch size is 32
-        loss_ex2 = self.critic_Q_ex2.fit([X1, X2], y2, sample_weight=weights, verbose=0)
-        loss_ex2 = np.mean(loss_ex2.history['loss'])
+        # train_on_batch is much cheaper than fit() for single-step online updates
+        loss_ex = float(self.critic_Q_ex.train_on_batch([X1, X2], y1, sample_weight=weights))
+        loss_ex2 = float(self.critic_Q_ex2.train_on_batch([X1, X2], y2, sample_weight=weights))
 
         X1_tensor = tf.convert_to_tensor(X1, dtype=tf.float32)
         with tf.GradientTape() as tape:
@@ -342,6 +356,12 @@ class DDPG(DRL):
         for i in range(episode):
             observation = self.env.reset()
             done = False
+            step_count = 0
+            episode_start = time.time()
+
+            # lightweight heartbeat so long runs show visible progress
+            if i % 1 == 0:
+                print("starting episode {} / {}".format(i, episode - 1), flush=True)
 
             # for recording purpose
             y_action = np.empty(0, dtype=int)
@@ -351,6 +371,11 @@ class DDPG(DRL):
 
             # steps in an episode
             while not done:
+                step_count += 1
+
+                # safety check: an episode should not exceed one path length
+                if step_count > self.env.num_period + 2:
+                    raise RuntimeError("episode {} exceeded expected step count {}".format(i, self.env.num_period))
 
                 # prepare state
                 x = np.array(observation).reshape(1, -1)
@@ -368,7 +393,7 @@ class DDPG(DRL):
                 # store to memory
                 self.remember(x[0], action, reward, observation, done)
 
-                if len(self.replay_buffer) > self.batch_size:
+                if len(self.replay_buffer) > self.batch_size and (step_count % self.update_every == 0):
 
                     # draw from memory
                     X1, X2, y_ex, y_ex2, weights = self.process_batch(self.batch_size)
@@ -378,6 +403,13 @@ class DDPG(DRL):
 
                     # soft update target
                     self.update_target_model()
+
+            print(
+                "finished episode {} | steps {} | elapsed {:.2f}s".format(
+                    i, step_count, time.time() - episode_start
+                ),
+                flush=True,
+            )
 
             # reduce epsilon per episode
             self.update_epsilon()
@@ -416,14 +448,16 @@ class DDPG(DRL):
                 #     self.actor.save_weights("model/ddpg_actor_" + str(int(i/100)) + ".h5")
                 #     self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex_" + str(int(i/100)) + ".h5")
                 #     self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2_" + str(int(i/100)) + ".h5")
-                self.actor.save_weights("model/ddpg_actor_" + str(int(i/1000)) + ".h5")
-                self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex_" + str(int(i/1000)) + ".h5")
-                self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2_" + str(int(i/1000)) + ".h5")
+                os.makedirs("model", exist_ok=True)
+                self.actor.save_weights("model/ddpg_actor_" + str(int(i/1000)) + ".weights.h5")
+                self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex_" + str(int(i/1000)) + ".weights.h5")
+                self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2_" + str(int(i/1000)) + ".weights.h5")
 
         # save weights once training is done
-        self.actor.save_weights("model/ddpg_actor.h5")
-        self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex.h5")
-        self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2.h5")
+            os.makedirs("model", exist_ok=True)
+            self.actor.save_weights("model/ddpg_actor.weights.h5")
+            self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex.weights.h5")
+            self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2.weights.h5")
 
         return history
 

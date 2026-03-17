@@ -1,7 +1,12 @@
 """A trading environment"""
-import gym
-from gym import spaces
-from gym.utils import seeding
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+    from gymnasium.utils import seeding
+except ImportError:
+    import gym
+    from gym import spaces
+    from gym.utils import seeding
 
 import numpy as np
 
@@ -57,7 +62,11 @@ class TradingEnv(gym.Env):
 
         # action space
         if continuous_action_flag:
-            self.action_space = spaces.Box(low=np.array([0]), high=np.array([num_contract * 100]), dtype=np.float32)
+            self.action_space = spaces.Box(
+                low=np.array([0.0], dtype=np.float32),
+                high=np.array([num_contract * 100.0], dtype=np.float32),
+                dtype=np.float32,
+            )
         else:
             self.num_action = num_contract * 100 + 1
             self.action_space = spaces.Discrete(self.num_action)

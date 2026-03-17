@@ -129,10 +129,15 @@ def sabr_implied_vol(vol, T, S, K, r, q, beta, volvol, rho):
         + rho * beta * volvol * vol / (4 * x)
         + volvol * volvol * (2 - 3 * rho * rho) / 24
     )
-    Phi = (volvol * x / vol) * np.log(F / K)
-    Chi = np.log((np.sqrt(1 - 2 * rho * Phi + Phi * Phi) + Phi - rho) / (1 - rho))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        Phi = (volvol * x / vol) * np.log(F / K)
+        Chi = np.log((np.sqrt(1 - 2 * rho * Phi + Phi * Phi) + Phi - rho) / (1 - rho))
 
-    SABRIV = np.where(F == K, vol * B / (F ** (1 - beta)), A * B * Phi / Chi)
+        sabr_atm = vol * B / (F ** (1 - beta))
+        # np.where evaluates both branches; compute this branch separately to avoid warnings.
+        sabr_non_atm = np.divide(A * B * Phi, Chi, out=np.zeros_like(Chi), where=np.abs(Chi) > 1e-12)
+
+    SABRIV = np.where(F == K, sabr_atm, sabr_non_atm)
 
     return SABRIV
 
@@ -152,8 +157,12 @@ def bartlett(sigma, T, S, K, r, q, ds, beta, volvol, rho):
     return b_delta
 
 def bs_call(iv, T, S, K, r, q):
-    d1 = (np.log(S / K) + (r - q + iv * iv / 2) * T) / (iv * np.sqrt(T))
-    d2 = d1 - iv * np.sqrt(T)
+    # Guard against zero volatility/TTM to avoid divide-by-zero warnings.
+    T_safe = np.maximum(T, 1e-12)
+    iv_safe = np.maximum(iv, 1e-12)
+    sqrt_T = np.sqrt(T_safe)
+    d1 = (np.log(S / K) + (r - q + iv_safe * iv_safe / 2) * T_safe) / (iv_safe * sqrt_T)
+    d2 = d1 - iv_safe * sqrt_T
     bs_price = S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
     bs_delta = np.exp(-q * T) * norm.cdf(d1)
     return bs_price, bs_delta
