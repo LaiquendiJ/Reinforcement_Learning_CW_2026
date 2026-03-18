@@ -59,8 +59,8 @@ class DDPG(DRL):
         self.epsilon = 1.0
 
         # discount rate for epsilon
-        self.epsilon_decay = 0.99994
-        # self.epsilon_decay = 0.9994
+        #self.epsilon_decay = 0.99994
+        self.epsilon_decay = 0.9994
 
         # min epsilon of epsilon-greedy.
         self.epsilon_min = 0.1
@@ -232,7 +232,9 @@ class DDPG(DRL):
             # noise = np.clip(np.random.normal(0, self.policy_noise), -self.noise_clip, self.noise_clip)
             # action = np.clip(action + noise, 0, self.env.num_contract * 100)
         else:
-            action = float(self.actor.predict(X, verbose=0)[0][0])
+            # Direct model call is faster than predict() for per-step inference.
+            x_tensor = tf.convert_to_tensor(X, dtype=tf.float32)
+            action = float(self.actor(x_tensor, training=False).numpy()[0][0])
 
         return action, None, None
 
@@ -454,10 +456,10 @@ class DDPG(DRL):
                 self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2_" + str(int(i/1000)) + ".weights.h5")
 
         # save weights once training is done
-            os.makedirs("model", exist_ok=True)
-            self.actor.save_weights("model/ddpg_actor.weights.h5")
-            self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex.weights.h5")
-            self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2.weights.h5")
+        os.makedirs("model", exist_ok=True)
+        self.actor.save_weights("model/ddpg_actor.weights.h5")
+        self.critic_Q_ex.save_weights("model/ddpg_critic_Q_ex.weights.h5")
+        self.critic_Q_ex2.save_weights("model/ddpg_critic_Q_ex2.weights.h5")
 
         return history
 

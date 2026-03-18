@@ -13,7 +13,7 @@ if __name__ == "__main__":
     bartlett_action_test = False
 
     # specify weights file to load
-    tag = "49"
+    tag = "17"
 
     # set init_ttm, spread, and other parameters according to the env that the model is trained
     env_test = TradingEnv(continuous_action_flag=True, sabr_flag=True, dg_random_seed=2, spread=0.01, num_contract=1, init_ttm=20, trade_freq=1, num_sim=100001)
@@ -30,7 +30,13 @@ if __name__ == "__main__":
             print("Testing model saved at " + tag + "K episode.")
         ddpg_test.load(tag=tag)
 
-    ddpg_test.test(100001, delta_flag=delta_action_test, bartlett_flag=bartlett_action_test)
+    ddpg_test.test(
+        1001, 
+        delta_flag=delta_action_test,
+        bartlett_flag=bartlett_action_test,
+        detail_every=100, 
+        progress_every=100,
+    )
 
     # for i in range(1, 51):
     #     tag = str(i)

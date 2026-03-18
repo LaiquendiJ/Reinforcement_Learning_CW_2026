@@ -3,6 +3,7 @@ import gym
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import time
 
 # put things common to different algorithms here
 class DRL:
@@ -13,16 +14,32 @@ class DRL:
         if not os.path.exists('history'):
             os.mkdir('history')
 
-    def test(self, total_episode, delta_flag=False, bartlett_flag=False):
+    def test(self, total_episode, delta_flag=False, bartlett_flag=False, detail_every=1000, progress_every=100):
         """hedge with model.
+        Arguments:
+            total_episode: number of episodes to test.
+            delta_flag: whether to use BS delta hedge.
+            bartlett_flag: whether to use Bartlett delta hedge.
+            detail_every: print detailed statistics every N episodes (use 1 for every episode).
+            progress_every: print lightweight progress every N episodes.
         """
-        print('testing...')
+        print('testing...', flush=True)
 
         self.epsilon = -1
 
         w_T_store = []
+        test_start = time.time()
 
         for i in range(total_episode):
+            if progress_every > 0 and i % progress_every == 0 and i != 0:
+                elapsed = time.time() - test_start
+                print(
+                    "testing progress: {} / {} episodes | elapsed {:.1f}s".format(
+                        i, total_episode - 1, elapsed
+                    ),
+                    flush=True,
+                )
+
             observation = self.env.reset()
             done = False
             action_store = []
@@ -52,19 +69,19 @@ class DRL:
             w_T = sum(reward_store)
             w_T_store.append(w_T)
 
-            if i % 1000 == 0:
+            if detail_every > 0 and i % detail_every == 0:
                 w_T_mean = np.mean(w_T_store)
                 w_T_var = np.var(w_T_store)
                 path_row = info["path_row"]
-                print(info)
+                print(info, flush=True)
                 with np.printoptions(precision=2, suppress=True):
-                    print("episode: {} | final wealth: {:.2f}; so far mean and variance of final wealth was {} and {}".format(i, w_T, w_T_mean, w_T_var))
-                    print("episode: {} | so far Y(0): {:.2f}".format(i, -w_T_mean + self.ra_c * np.sqrt(w_T_var)))
-                    print("episode: {} | rewards: {}".format(i, np.array(reward_store)))
-                    print("episode: {} | action taken: {}".format(i, np.array(action_store)))
-                    print("episode: {} | deltas {}".format(i, self.env.delta_path[path_row] * 100))
-                    print("episode: {} | stock price {}".format(i, self.env.path[path_row]))
-                    print("episode: {} | option price {}\n".format(i, self.env.option_price_path[path_row] * 100))
+                    print("episode: {} | final wealth: {:.2f}; so far mean and variance of final wealth was {} and {}".format(i, w_T, w_T_mean, w_T_var), flush=True)
+                    print("episode: {} | so far Y(0): {:.2f}".format(i, -w_T_mean + self.ra_c * np.sqrt(w_T_var)), flush=True)
+                    print("episode: {} | rewards: {}".format(i, np.array(reward_store)), flush=True)
+                    print("episode: {} | action taken: {}".format(i, np.array(action_store)), flush=True)
+                    print("episode: {} | deltas {}".format(i, self.env.delta_path[path_row] * 100), flush=True)
+                    print("episode: {} | stock price {}".format(i, self.env.path[path_row]), flush=True)
+                    print("episode: {} | option price {}\n".format(i, self.env.option_price_path[path_row] * 100), flush=True)
 
     def plot(self, history):
         pass
